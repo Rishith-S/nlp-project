@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gardening_agent_config import _iso
+from config import _iso
 
 CARE_PROFILES = [
     {

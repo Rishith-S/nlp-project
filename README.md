@@ -5,7 +5,7 @@ A small gardening data app that answers questions using a local SQLite database 
 ## What's here
 
 - Gardening_Agent_Colab_Notebook.ipynb - notebook with setup, helpers, and demos
-- gardening_agent_streamlit_app.py - Streamlit UI that loads helper functions from the notebook
+- streamlit_app.py - Streamlit UI for interactive use
 - gardening_agent_full_demo.db - sample SQLite database
 - requirements.txt - minimal dependencies
 
@@ -15,7 +15,7 @@ A small gardening data app that answers questions using a local SQLite database 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-streamlit run gardening_agent_streamlit_app.py
+streamlit run streamlit_app.py
 ```
 
 ## Notebook usage
@@ -28,7 +28,7 @@ Live web search requires a provider. If none are configured, the app returns a c
 
 - Set TAVILY_API_KEY for Tavily search
 - Set SERPER_API_KEY for Serper search
-- Optional: set ALLOW_DDG_SEARCH=1 and install duckduckgo_search for DuckDuckGo fallback
+- DuckDuckGo uses `duckduckgo_search` (DDGS). Set ALLOW_DDG_SEARCH=1 to enable it as a fallback.
 
 Example (PowerShell):
 
@@ -36,8 +36,23 @@ Example (PowerShell):
 $env:TAVILY_API_KEY = "your-key"
 # or
 $env:SERPER_API_KEY = "your-key"
-# optional DDG fallback
+# DDGS fallback
 $env:ALLOW_DDG_SEARCH = "1"
+```
+
+## Model configuration
+
+If you want to use the remote model, set:
+
+```powershell
+$env:OPENROUTER_API_KEY = "your-key"
+```
+
+To use local models, set:
+
+```powershell
+$env:LOCAL_LARGE_MODEL_PATH = "C:\path\to\your\large-model"
+$env:LOCAL_SMALL_MODEL_PATH = "C:\path\to\your\small-model"
 ```
 
 ## Database notes
@@ -48,4 +63,4 @@ $env:ALLOW_DDG_SEARCH = "1"
 
 ## Streamlit UI notes
 
-The UI executes code cells from the notebook at runtime to reuse helper functions. Keep the notebook path in gardening_agent_streamlit_app.py accurate if you move files.
+The UI imports the helper modules directly (no notebook execution). Keep file names aligned with the imports if you rename modules.

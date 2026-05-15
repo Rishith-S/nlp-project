@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from gardening_agent_config import (
+from config import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -19,7 +19,7 @@ from gardening_agent_config import (
     torch,
 )
 from gardening_agent_seed import CARE_PROFILES, PERSONAL_PLANTS
-from gardening_agent_tools import execute_sql, pretty_rows, search_web
+from agent_tools import execute_sql, pretty_rows, search_web
 
 SQL_KEYWORDS = {
     'banana', 'tomato', 'hibiscus', 'monstera', 'basil', 'mint', 'succulent', 'snake plant',
@@ -36,6 +36,19 @@ HYBRID_KEYWORDS = {
     'best time to water', 'combine', 'using the database plus external info', 'declining',
 }
 
+DENYLIST_PATTERNS = [
+    r"\b(drop|delete|truncate|alter|update|insert)\s+table\b",
+    r"\b(sqlite_master|pragma|attach|detach)\b",
+    r"\b(api\s*key|secret|token|password)\b",
+    r"\b(exfiltrate|leak|steal)\b",
+]
+
+ALLOWLIST_KEYWORDS = {
+    'plant', 'plants', 'garden', 'gardening', 'soil', 'watering', 'fertilizer', 'repot',
+    'pest', 'disease', 'light', 'sun', 'temperature', 'humidity', 'grow', 'growth', 'bloom',
+    'prune', 'pruning', 'mulch', 'compost', 'seed', 'nursery', 'potting', 'soil ph',
+}
+
 
 @dataclass
 class BenchmarkResult:
@@ -48,16 +61,22 @@ class BenchmarkResult:
     robustness: float
 
 
-LOCAL_LARGE_MODEL = r"C:\models\llama3-8b-instruct"
-LOCAL_SMALL_MODEL = r"C:\models\phi-3.5-mini"
+LOCAL_LARGE_MODEL = os.getenv("LOCAL_LARGE_MODEL_PATH", "").strip()
+LOCAL_SMALL_MODEL = os.getenv("LOCAL_SMALL_MODEL_PATH", "").strip()
 OPENROUTER_LARGE_MODEL = "meta-llama/llama-3.1-8b-instruct"
 OPENROUTER_SMALL_MODEL = "microsoft/phi-3.5-mini-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-os.environ["OPENROUTER_API_KEY"] = "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"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 _GENERATOR_CACHE: Dict[str, Any] = {}
+
+
+def _get_model_path(friendly_name: str) -> Optional[str]:
+    model_path = LOCAL_LARGE_MODEL if friendly_name == 'large' else LOCAL_SMALL_MODEL
+    if not model_path:
+        return None
+    return model_path if Path(model_path).exists() else None
 
 
 def _load_local_generator(model_path: str) -> Optional[Any]:
@@ -91,7 +110,7 @@ def _load_local_generator(model_path: str) -> Optional[Any]:
 def get_generator_for(friendly_name: str) -> Optional[Any]:
     if friendly_name in _GENERATOR_CACHE:
         return _GENERATOR_CACHE[friendly_name]
-    model_path = LOCAL_LARGE_MODEL if friendly_name == 'large' else LOCAL_SMALL_MODEL
+    model_path = _get_model_path(friendly_name)
     generator = _load_local_generator(model_path)
     _GENERATOR_CACHE[friendly_name] = generator
     return generator
@@ -165,6 +184,26 @@ def _is_spending_query(user_query: str) -> bool:
 def _is_pest_alert(user_query: str) -> bool:
     q = user_query.lower()
     return any(word in q for word in ['beetle', 'pest', 'mildew', 'warning', 'alert'])
+
+
+def _matches_denylist(user_query: str) -> bool:
+    for pattern in DENYLIST_PATTERNS:
+        if re.search(pattern, user_query, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _matches_allowlist(user_query: str) -> bool:
+    q = user_query.lower()
+    return any(keyword in q for keyword in ALLOWLIST_KEYWORDS)
+
+
+def _is_unsafe_prompt(user_query: str) -> Optional[str]:
+    if _matches_denylist(user_query):
+        return 'Blocked: unsafe or sensitive request.'
+    if not _matches_allowlist(user_query):
+        return 'Blocked: out-of-scope request (gardening only).'
+    return None
 
 
 def expected_route_from_keywords(user_query: str) -> str:
@@ -498,6 +537,22 @@ def compose_final_answer(
 
 def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]:
     start = time.perf_counter()
+    refusal_reason = _is_unsafe_prompt(user_query)
+    if refusal_reason:
+        return {
+            'query': user_query,
+            'route': 'refusal',
+            'expected_route': None,
+            'latency_s': round(time.perf_counter() - start, 4),
+            'sql_result': None,
+            'web_result': None,
+            'final_answer': (
+                'I can only help with gardening-related questions and cannot assist with unsafe requests.'
+            ),
+            'model_choice': model_choice,
+            'model_loaded': _model_loaded(model_choice),
+            'refusal_reason': refusal_reason,
+        }
     route = route_query(user_query)
     expected_route = expected_route_from_keywords(user_query)
     sql_result = None

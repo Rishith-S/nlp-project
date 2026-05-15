@@ -3,9 +3,9 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
-from gardening_agent_agent import _model_summarize, expected_route_from_keywords, handle_query
-from gardening_agent_config import pd
-from gardening_agent_tools import execute_sql
+from agent import _model_summarize, expected_route_from_keywords, handle_query
+from config import pd
+from agent_tools import execute_sql
 
 
 demo_queries = [

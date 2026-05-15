@@ -35,9 +35,6 @@ try:
 except ImportError:
     display = print
 
-# Set Tavily API key
-os.environ['TAVILY_API_KEY'] = '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'
-
 OFFLINE_ONLY = False
 
 DB_PATH = Path('gardening_agent_full_demo.db')

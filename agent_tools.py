@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from gardening_agent_db import connect
+from agent_db import connect
 
 WRITEABLE_TABLES = {'shopping_list'}
 
@@ -176,7 +176,7 @@ def _search_serper(query: str, max_results: int = 5) -> Optional[List[Dict[str, 
 def build_web_query(user_query: str) -> str:
     q = user_query.lower()
     if 'san ramon' in q and 'rain' in q:
-        return 'San Ramon weather tomorrow rain forecast'
+        return 'San Ramon CA weather tomorrow rain forecast'
     if '94582' in q and 'neem oil' in q:
         return 'nursery near 94582 neem oil'
     if 'pruning roses' in q or 'prune roses' in q:
@@ -196,6 +196,42 @@ def build_web_query(user_query: str) -> str:
     if 'weather' in q or 'temperature' in q:
         return user_query
     return user_query
+
+
+def _clean_snippet(text: str, limit: int = 200) -> str:
+    if not text:
+        return ''
+    cleaned = ' '.join(str(text).split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip() + '...'
+
+
+def _clean_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    cleaned_results: List[Dict[str, str]] = []
+    seen = set()
+    for item in results:
+        snippet = _clean_snippet(item.get('snippet', ''))
+        title = _clean_snippet(item.get('title', ''), limit=120)
+        if snippet:
+            key = snippet.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+        cleaned_results.append(
+            {
+                'title': title,
+                'url': item.get('url', ''),
+                'snippet': snippet,
+            }
+        )
+    return cleaned_results
+
+
+def _build_summary(results: List[Dict[str, str]], max_items: int = 3, limit: int = 420) -> str:
+    snippets = [item.get('snippet', '') for item in results if item.get('snippet')]
+    summary = ' '.join(snippets[:max_items]).strip()
+    return _clean_snippet(summary, limit=limit) or 'Web search returned relevant gardening results.'
 
 
 def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
@@ -221,14 +257,14 @@ def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
             'latency_s': round(time.perf_counter() - start, 4),
         }
 
-    summary_bits = [item['snippet'] for item in results[:3] if item.get('snippet')]
-    summary = ' '.join(summary_bits).strip() or 'Web search returned relevant gardening results.'
+    cleaned_results = _clean_results(results)
+    summary = _build_summary(cleaned_results)
     return {
         'ok': True,
         'provider': provider,
         'query': query,
         'summary': summary,
-        'results': results,
+        'results': cleaned_results,
         'latency_s': round(time.perf_counter() - start, 4),
     }
 

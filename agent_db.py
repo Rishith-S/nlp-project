@@ -4,7 +4,7 @@ import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
-from gardening_agent_config import CURRENT_MONTH_DAY, DB_PATH, LAST_MONTH_END, LAST_MONTH_START, TODAY, _iso
+from config import CURRENT_MONTH_DAY, DB_PATH, LAST_MONTH_END, LAST_MONTH_START, TODAY, _iso
 from gardening_agent_seed import CARE_PROFILES, PERSONAL_PLANTS
 
 
