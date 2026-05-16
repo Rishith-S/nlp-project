@@ -18,19 +18,6 @@ except ImportError:
     pd = None
 
 try:
-    import torch
-except ImportError:
-    torch = None
-
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
-except ImportError:
-    AutoModelForCausalLM = None
-    AutoTokenizer = None
-    BitsAndBytesConfig = None
-    pipeline = None
-
-try:
     from IPython.display import display
 except ImportError:
     display = print
@@ -52,9 +39,6 @@ def _iso(days_ago: int) -> str:
 
 __all__ = [
     'Any',
-    'AutoModelForCausalLM',
-    'AutoTokenizer',
-    'BitsAndBytesConfig',
     'CURRENT_MONTH_DAY',
     'DB_PATH',
     'Dict',
@@ -75,12 +59,10 @@ __all__ = [
     'json',
     'os',
     'pd',
-    'pipeline',
     're',
     'sqlite3',
     'statistics',
     'textwrap',
     'time',
     'timedelta',
-    'torch',
 ]

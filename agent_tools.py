@@ -80,7 +80,10 @@ def _search_duckduckgo(query: str, max_results: int = 5) -> Optional[List[Dict[s
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS  # preferred package
+            except Exception:
+                from duckduckgo_search import DDGS  # fallback to older package
     except Exception:
         return None
 
@@ -100,75 +103,6 @@ def _search_duckduckgo(query: str, max_results: int = 5) -> Optional[List[Dict[s
                 }
             )
         return cleaned
-    except Exception:
-        return None
-
-
-def _search_tavily(query: str, max_results: int = 5) -> Optional[List[Dict[str, str]]]:
-    api_key = os.getenv('TAVILY_API_KEY')
-    if not api_key:
-        return None
-
-    try:
-        import requests
-    except Exception:
-        return None
-
-    try:
-        response = requests.post(
-            'https://api.tavily.com/search',
-            json={
-                'api_key': api_key,
-                'query': query,
-                'max_results': max_results,
-                'include_answer': False,
-                'include_raw_content': False,
-            },
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        results = payload.get('results', [])
-        return [
-            {
-                'title': item.get('title', ''),
-                'url': item.get('url', ''),
-                'snippet': item.get('content', ''),
-            }
-            for item in results
-        ]
-    except Exception:
-        return None
-
-
-def _search_serper(query: str, max_results: int = 5) -> Optional[List[Dict[str, str]]]:
-    api_key = os.getenv('SERPER_API_KEY')
-    if not api_key:
-        return None
-
-    try:
-        import requests
-    except Exception:
-        return None
-
-    try:
-        response = requests.post(
-            'https://google.serper.dev/search',
-            headers={'X-API-KEY': api_key, 'Content-Type': 'application/json'},
-            json={'q': query, 'num': max_results},
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        results = payload.get('organic', [])
-        return [
-            {
-                'title': item.get('title', ''),
-                'url': item.get('link', ''),
-                'snippet': item.get('snippet', ''),
-            }
-            for item in results
-        ]
     except Exception:
         return None
 
@@ -238,22 +172,17 @@ def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
     query = build_web_query(user_query)
     start = time.perf_counter()
 
-    results = _search_tavily(query, max_results=max_results)
-    provider = 'tavily'
-    if results is None:
-        results = _search_serper(query, max_results=max_results)
-        provider = 'serper'
-    if results is None and os.getenv('ALLOW_DDG_SEARCH') == '1':
-        results = _search_duckduckgo(query, max_results=max_results)
-        provider = 'duckduckgo'
+    # Use DuckDuckGo when available
+    results = _search_duckduckgo(query, max_results=max_results)
+    provider = 'duckduckgo'
     if results is None:
         return {
             'ok': False,
             'provider': None,
             'query': query,
-            'summary': 'Web search unavailable. Configure a search provider and try again.',
+            'summary': 'Web search unavailable. Install ddgs to enable DuckDuckGo search.',
             'results': [],
-            'error': 'No web search provider available. Set TAVILY_API_KEY or SERPER_API_KEY, or enable ALLOW_DDG_SEARCH=1 with duckduckgo_search installed.',
+            'error': 'No web search provider available. Install ddgs.',
             'latency_s': round(time.perf_counter() - start, 4),
         }
 

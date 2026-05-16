@@ -4,37 +4,16 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
     CURRENT_MONTH_DAY,
     LAST_MONTH_END,
     LAST_MONTH_START,
     TODAY,
-    pipeline,
-    torch,
 )
-from gardening_agent_seed import CARE_PROFILES, PERSONAL_PLANTS
+from agent_db import CARE_PROFILES, PERSONAL_PLANTS
 from agent_tools import execute_sql, pretty_rows, search_web
-
-SQL_KEYWORDS = {
-    'banana', 'tomato', 'hibiscus', 'monstera', 'basil', 'mint', 'succulent', 'snake plant',
-    'watering', 'fertilize', 'repot', 'growth', 'expense', 'spend', 'soil ph', 'pH', 'inactive',
-    'shopping list', 'logs', 'temperature', 'status', 'compare', 'low light', 'low-light',
-    'indoor', 'beginner', 'beginners'
-}
-WEB_KEYWORDS = {
-    'rain', 'weather', 'forecast', 'nursery', 'video', 'last frost', 'beetle', 'pest', 'mildew',
-    'tutorial', 'how to', 'how should i', 'how do i', 'home depot', 'eco-friendly', 'identify'
-}
-HYBRID_KEYWORDS = {
-    'brown spots', 'yellow leaves', 'based on my logs', 'based on the logs', 'safe temperature',
-    'best time to water', 'combine', 'using the database plus external info', 'declining',
-}
 
 DENYLIST_PATTERNS = [
     r"\b(drop|delete|truncate|alter|update|insert)\s+table\b",
@@ -42,12 +21,6 @@ DENYLIST_PATTERNS = [
     r"\b(api\s*key|secret|token|password)\b",
     r"\b(exfiltrate|leak|steal)\b",
 ]
-
-ALLOWLIST_KEYWORDS = {
-    'plant', 'plants', 'garden', 'gardening', 'soil', 'watering', 'fertilizer', 'repot',
-    'pest', 'disease', 'light', 'sun', 'temperature', 'humidity', 'grow', 'growth', 'bloom',
-    'prune', 'pruning', 'mulch', 'compost', 'seed', 'nursery', 'potting', 'soil ph',
-}
 
 
 @dataclass
@@ -61,59 +34,11 @@ class BenchmarkResult:
     robustness: float
 
 
-LOCAL_LARGE_MODEL = os.getenv("LOCAL_LARGE_MODEL_PATH", "").strip()
-LOCAL_SMALL_MODEL = os.getenv("LOCAL_SMALL_MODEL_PATH", "").strip()
 OPENROUTER_LARGE_MODEL = "meta-llama/llama-3.1-8b-instruct"
 OPENROUTER_SMALL_MODEL = "microsoft/phi-3.5-mini-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-_GENERATOR_CACHE: Dict[str, Any] = {}
-
-
-def _get_model_path(friendly_name: str) -> Optional[str]:
-    model_path = LOCAL_LARGE_MODEL if friendly_name == 'large' else LOCAL_SMALL_MODEL
-    if not model_path:
-        return None
-    return model_path if Path(model_path).exists() else None
-
-
-def _load_local_generator(model_path: str) -> Optional[Any]:
-    if not model_path or not Path(model_path).exists():
-        return None
-    if AutoTokenizer is None or AutoModelForCausalLM is None or pipeline is None:
-        return None
-
-    use_cuda = torch is not None and torch.cuda.is_available()
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-        load_kwargs: Dict[str, Any] = {
-            'local_files_only': True,
-            'device_map': 'cuda' if use_cuda else 'auto',
-        }
-        if torch is not None:
-            load_kwargs['torch_dtype'] = torch.float16 if use_cuda else torch.float32
-        if BitsAndBytesConfig is not None and use_cuda:
-            load_kwargs['quantization_config'] = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type='nf4',
-                bnb_4bit_compute_dtype=torch.float16,
-            )
-        model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
-        return pipeline('text-generation', model=model, tokenizer=tokenizer, device=0 if use_cuda else -1)
-    except Exception:
-        return None
-
-
-def get_generator_for(friendly_name: str) -> Optional[Any]:
-    if friendly_name in _GENERATOR_CACHE:
-        return _GENERATOR_CACHE[friendly_name]
-    model_path = _get_model_path(friendly_name)
-    generator = _load_local_generator(model_path)
-    _GENERATOR_CACHE[friendly_name] = generator
-    return generator
+OPENROUTER_API_KEY = "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"
 
 
 def _openrouter_chat(prompt: str, model_id: str) -> Optional[str]:
@@ -149,24 +74,14 @@ def _openrouter_chat(prompt: str, model_id: str) -> Optional[str]:
 
 
 def _model_summarize(prompt: str, model_choice: str) -> Optional[str]:
-    if OPENROUTER_API_KEY:
-        model_id = OPENROUTER_LARGE_MODEL if model_choice == 'large' else OPENROUTER_SMALL_MODEL
-        return _openrouter_chat(prompt, model_id)
-
-    generator = get_generator_for(model_choice)
-    if generator is None:
+    if not OPENROUTER_API_KEY:
         return None
-    try:
-        output = generator(prompt, max_new_tokens=256, do_sample=False, temperature=0.0)
-        return output[0]['generated_text'].replace(prompt, '').strip()
-    except Exception:
-        return None
+    model_id = OPENROUTER_LARGE_MODEL if model_choice == 'large' else OPENROUTER_SMALL_MODEL
+    return _openrouter_chat(prompt, model_id)
 
 
 def _model_loaded(model_choice: str) -> bool:
-    if OPENROUTER_API_KEY:
-        return True
-    return get_generator_for(model_choice) is not None
+    return bool(OPENROUTER_API_KEY)
 
 
 def _has_weather_and_plant(user_query: str) -> bool:
@@ -193,39 +108,53 @@ def _matches_denylist(user_query: str) -> bool:
     return False
 
 
-def _matches_allowlist(user_query: str) -> bool:
-    q = user_query.lower()
-    return any(keyword in q for keyword in ALLOWLIST_KEYWORDS)
+def _is_gardening_related(user_query: str, model_choice: str = 'large') -> bool:
+    prompt = (
+        "Classify the user query as gardening-related or not gardening-related. "
+        "Reply with exactly YES or NO and nothing else.\n\n"
+        f"Query: {user_query}"
+    )
+    for choice in (model_choice, 'small' if model_choice == 'large' else 'large'):
+        response = _model_summarize(prompt, model_choice=choice)
+        if not response:
+            continue
+        normalized = response.strip().lower()
+        first_token = normalized.split()[0] if normalized else ''
+        if first_token in {'yes', 'y'}:
+            return True
+        if first_token in {'no', 'n'}:
+            return False
+    return False
 
 
 def _is_unsafe_prompt(user_query: str) -> Optional[str]:
     if _matches_denylist(user_query):
         return 'Blocked: unsafe or sensitive request.'
-    if not _matches_allowlist(user_query):
+    if not _is_gardening_related(user_query):
         return 'Blocked: out-of-scope request (gardening only).'
     return None
 
 
-def expected_route_from_keywords(user_query: str) -> str:
-    q = user_query.lower()
-    has_web = any(keyword in q for keyword in WEB_KEYWORDS)
-    has_sql = any(keyword in q for keyword in SQL_KEYWORDS)
-
-    if _has_weather_and_plant(user_query):
-        return 'hybrid'
-    if _is_spending_query(user_query):
-        return 'sql'
-    if _is_pest_alert(user_query):
-        return 'web'
-    if any(keyword in q for keyword in HYBRID_KEYWORDS) or (has_web and has_sql):
-        return 'hybrid'
-    if has_web:
-        return 'web'
+def expected_route_from_keywords(user_query: str, model_choice: str = 'large') -> str:
+    if not _is_gardening_related(user_query, model_choice=model_choice):
+        return 'refusal'
+    prompt = (
+        "Choose the best tool route for this gardening question. Reply with exactly one word: "
+        "sql, web, or hybrid.\n\n"
+        f"Query: {user_query}"
+    )
+    for choice in (model_choice, 'small' if model_choice == 'large' else 'large'):
+        response = _model_summarize(prompt, model_choice=choice)
+        if not response:
+            continue
+        normalized = response.strip().lower().split()[0]
+        if normalized in {'sql', 'web', 'hybrid'}:
+            return normalized
     return 'sql'
 
 
-def route_query(user_query: str) -> str:
-    return expected_route_from_keywords(user_query)
+def route_query(user_query: str, model_choice: str = 'large') -> str:
+    return expected_route_from_keywords(user_query, model_choice=model_choice)
 
 
 PLANT_CANDIDATES = sorted(
@@ -553,8 +482,8 @@ def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]
             'model_loaded': _model_loaded(model_choice),
             'refusal_reason': refusal_reason,
         }
-    route = route_query(user_query)
-    expected_route = expected_route_from_keywords(user_query)
+    route = route_query(user_query, model_choice=model_choice)
+    expected_route = route
     sql_result = None
     web_result = None
     if route in {'sql', 'hybrid'}:
@@ -589,7 +518,6 @@ __all__ = [
     'build_sql',
     'compose_final_answer',
     'expected_route_from_keywords',
-    'get_generator_for',
     'handle_query',
     'route_query',
     '_model_loaded',
