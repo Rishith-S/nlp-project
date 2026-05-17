@@ -13,7 +13,7 @@ from config import (
     TODAY,
 )
 from agent_db import CARE_PROFILES, PERSONAL_PLANTS
-from agent_tools import execute_sql, pretty_rows, search_web
+from config import execute_sql, pretty_rows, search_web
 
 DENYLIST_PATTERNS = [
     r"\b(drop|delete|truncate|alter|update|insert)\s+table\b",

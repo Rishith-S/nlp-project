@@ -17,7 +17,7 @@ An intelligent gardening assistant that answers your plant care questions using 
 ```
 nlp-project/
 ├── agent.py                              # Core routing, classification, and query handling
-├── agent_tools.py                        # SQL queries and web search utilities
+├── config.py                             # Environment variables, helpers, and utility functions (SQL & web)
 ├── agent_db.py                           # Database schema and seed data (merged from gardening_agent_seed.py)
 ├── config.py                             # Environment variables, database paths, helper functions
 ├── streamlit_app.py                      # Web UI for interactive querying
@@ -50,7 +50,7 @@ nlp-project/
 | Module | Purpose |
 |--------|---------|
 | `agent.py` | **Orchestration**: classifies queries, routes to tools, LLM calls |
-| `agent_tools.py` | **Utilities**: SQL execution, web search (ddgs), result cleaning |
+| `config.py` | **Utilities & Settings**: env vars, SQL execution, web search (ddgs), and helpers |
 | `agent_db.py` | **Data**: SQLite schema, seed data (care profiles + personal plants) |
 | `config.py` | **Settings**: env vars, DB paths, date helpers, model initialization |
 | `streamlit_app.py` | **UI**: web interface for querying and viewing results |

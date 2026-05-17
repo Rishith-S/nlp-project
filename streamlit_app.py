@@ -2,7 +2,7 @@ import time
 import streamlit as st
 
 from agent import handle_query
-from agent_tools import pretty_rows
+from config import pretty_rows
 
 
 st.set_page_config(page_title='Gardening Agent Demo', layout='wide')
