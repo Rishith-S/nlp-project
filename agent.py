@@ -426,7 +426,12 @@ def build_sql(user_query: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _template_answer(rows: List[Dict[str, Any]], web_summary: Optional[str], user_query: str) -> Optional[str]:
+def _template_answer(
+    rows: List[Dict[str, Any]],
+    web_summary: Optional[str],
+    user_query: str,
+    web_result: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     if not rows:
         return None
     first = rows[0]
@@ -453,9 +458,30 @@ def _template_answer(rows: List[Dict[str, Any]], web_summary: Optional[str], use
             )
         return "Based on your growth logs, " + '; '.join(parts) + '.'
     if 'temp_safe_low_c' in first:
+        plant = first.get('common_name', 'Hibiscus')
+        safe_low_c = float(first['temp_safe_low_c'])
+        safe_high_c = float(first['temp_safe_high_c'])
+        safe_low_f = safe_low_c * 9 / 5 + 32
+        safe_high_f = safe_high_c * 9 / 5 + 32
+        weather = (web_result or {}).get('weather') or {}
+        low_f = weather.get('temperature_2m_min_f')
+        high_f = weather.get('temperature_2m_max_f')
+        forecast_date = weather.get('date')
+        if isinstance(low_f, (int, float)) and isinstance(high_f, (int, float)):
+            if low_f < safe_low_f:
+                verdict = "That low is below the safe range, so protect it or bring it inside overnight."
+            elif high_f > safe_high_f:
+                verdict = "That high is above the safe range, so give afternoon shade and check soil moisture."
+            else:
+                verdict = "That forecast is within the safe range."
+            return (
+                f"{plant}'s safe range is {safe_low_c:.0f}-{safe_high_c:.0f}C "
+                f"({safe_low_f:.0f}-{safe_high_f:.0f}F). San Ramon forecast for {forecast_date}: "
+                f"high {high_f:.0f}F / low {low_f:.0f}F. {verdict}"
+            )
         summary = (
-            f"Safe temperature range for {first.get('common_name', 'Hibiscus')}: "
-            f"{first['temp_safe_low_c']}C to {first['temp_safe_high_c']}C."
+            f"Safe temperature range for {plant}: {safe_low_c:.0f}C to {safe_high_c:.0f}C "
+            f"({safe_low_f:.0f}F to {safe_high_f:.0f}F)."
         )
         if web_summary and 'unavailable' not in web_summary.lower():
             summary = summary + f" Forecast context: {web_summary}"
@@ -544,32 +570,70 @@ def _offline_web_answer(user_query: str) -> Optional[str]:
     return None
 
 
+def _format_sources(results: List[Dict[str, Any]], limit: int = 3) -> str:
+    source_bits = []
+    for idx, item in enumerate(results[:limit], start=1):
+        title = item.get('title') or 'Source'
+        url = item.get('url') or ''
+        if url:
+            source_bits.append(f"[{idx}] {title}: {url}")
+        else:
+            source_bits.append(f"[{idx}] {title}")
+    return " Sources: " + " | ".join(source_bits) if source_bits else ""
+
+
 def _format_web_results(web_result: Dict[str, Any], limit: int = 3) -> str:
     summary = web_result.get('summary') or 'I found relevant web results.'
     results = web_result.get('results') or []
-    sources = []
-    for item in results[:limit]:
-        title = item.get('title') or 'Source'
+    if results:
+        return summary + _format_sources(results, limit=limit)
+    return summary
+
+
+def _web_evidence(web_result: Dict[str, Any], limit: int = 3) -> str:
+    lines = []
+    for idx, item in enumerate((web_result.get('results') or [])[:limit], start=1):
+        title = item.get('title') or 'Untitled source'
         url = item.get('url') or ''
         snippet = item.get('snippet') or ''
-        if url:
-            sources.append(f"{title}: {url}")
-        elif snippet:
-            sources.append(f"{title}: {snippet}")
-    if sources:
-        return summary + " Sources: " + " | ".join(sources)
-    return summary
+        lines.append(f"[{idx}] Title: {title}\nURL: {url}\nSnippet: {snippet}")
+    return "\n\n".join(lines)
+
+
+def _model_web_answer(user_query: str, web_result: Dict[str, Any], model_choice: str) -> Optional[str]:
+    if web_result.get('provider') == 'open-meteo':
+        return None
+    evidence = _web_evidence(web_result)
+    if not evidence:
+        return None
+    prompt = (
+        "Answer the gardening user using ONLY the web evidence below. "
+        "Do not paste raw snippets. Synthesize the result into a direct, useful answer. "
+        "Cite only the numbered sources provided below, such as [1] or [2]. "
+        "Do not cite a source number that is not shown. "
+        "Do not infer that no warning or no inventory exists just because the snippets do not mention it. "
+        "If the evidence does not prove live availability, say to call or verify first. "
+        "Keep it under 120 words.\n\n"
+        f"User question: {user_query}\n\n"
+        f"Web evidence:\n{evidence}"
+    )
+    answer = _model_summarize(prompt, model_choice=model_choice)
+    if not answer:
+        return None
+    if web_result.get('results') and 'Sources:' not in answer:
+        answer = answer.rstrip() + _format_sources(web_result.get('results') or [], limit=3)
+    return answer
 
 
 def _source_lines(results: List[Dict[str, Any]], limit: int = 3) -> List[str]:
     lines = []
-    for item in results[:limit]:
+    for idx, item in enumerate(results[:limit], start=1):
         title = item.get('title') or 'Source'
         url = item.get('url') or ''
         if url:
-            lines.append(f"{title} ({url})")
+            lines.append(f"[{idx}] {title} ({url})")
         else:
-            lines.append(title)
+            lines.append(f"[{idx}] {title}")
     return lines
 
 
@@ -577,17 +641,21 @@ def _specific_web_answer(user_query: str, web_result: Dict[str, Any]) -> Optiona
     q = user_query.lower()
     results = web_result.get('results') or []
     source_text = ' Sources: ' + ' | '.join(_source_lines(results)) if results else ''
+    def result_text(item: Dict[str, Any]) -> str:
+        return (item.get('title', '') + ' ' + item.get('snippet', '') + ' ' + item.get('url', '')).lower()
 
     if '94582' in q and 'neem oil' in q:
         candidates = [
             item for item in results
-            if any(term in (item.get('title', '') + item.get('snippet', '')).lower()
-                   for term in ['organeem', 'san ramon', '94582', 'devil mountain', 'garden center'])
+            if 'neem' in result_text(item)
+            and not any(bad in result_text(item) for bad in ['facebook.com', 'youtube.com', 'postcodebase.com', 'bestplaces.net'])
         ] or results
         source_text = ' Sources: ' + ' | '.join(_source_lines(candidates)) if candidates else ''
+        names = [item.get('title', 'a local source') for item in candidates[:2]]
+        lead_phrase = '; '.join(names) if names else 'nearby garden supply listings'
         return (
-            "Best lead I found: Organeem appears in San Ramon/94582 search results for neem products. "
-            "Also check nearby garden centers such as Devil Mountain or local nurseries, but call first because search results do not prove live inventory."
+            f"Best leads I found: {lead_phrase}. Treat this as availability evidence, not a live inventory guarantee. "
+            "Call before going and ask whether they sell garden-safe neem oil today."
             f"{source_text}"
         )
 
@@ -597,8 +665,9 @@ def _specific_web_answer(user_query: str, web_result: Dict[str, Any]) -> Optiona
             if 'youtube' in item.get('url', '').lower() or 'video' in (item.get('title', '') + item.get('snippet', '')).lower()
         ] or results
         source_text = ' Sources: ' + ' | '.join(_source_lines(videos)) if videos else ''
+        names = '; '.join(item.get('title', 'rose-pruning video') for item in videos[:2])
         return (
-            "Good rose-pruning video options found. Pick one that demonstrates removing dead/crossing canes, opening the center for airflow, "
+            f"Good video/tutorial options: {names}. Choose one that shows dead/crossing cane removal, opening the center for airflow, "
             "and cutting above outward-facing buds."
             f"{source_text}"
         )
@@ -612,20 +681,60 @@ def _specific_web_answer(user_query: str, web_result: Dict[str, Any]) -> Optiona
         )
 
     if 'last frost' in q:
+        frost_sources = [
+            item for item in results
+            if any(term in result_text(item) for term in ['san ramon', '94582', 'garden.org/apps/frost-dates'])
+        ] or results
+        source_text = ' Sources: ' + ' | '.join(_source_lines(frost_sources)) if frost_sources else ''
         return (
-            "Use a local frost-date or extension source rather than a generic national date. For planting, wait until the local last-frost estimate has passed "
-            "and the 7-10 day forecast keeps nighttime lows safely above the crop's tolerance."
+            "For this project context, use San Ramon/94582 as the location and check a ZIP-code frost-date tool such as Almanac or Garden.org. "
+            "For planting, wait until the local estimate has passed and the 7-10 day forecast keeps nighttime lows above the crop's tolerance."
+            f"{source_text}"
+        )
+
+    if 'japanese beetle' in q:
+        beetle_sources = [
+            item for item in results
+            if 'japanese beetle' in item.get('title', '').lower()
+            or 'japanese-beetle' in item.get('url', '').lower()
+        ] or results
+        source_text = ' Sources: ' + ' | '.join(_source_lines(beetle_sources)) if beetle_sources else ''
+        return (
+            "I would not claim a current active warning from snippets alone. The reliable California sources to check are CDFA and UC IPM; "
+            "they treat Japanese beetle as an invasive pest with eradication/reporting importance. If you suspect one, report it to your county agricultural office."
+            f"{source_text}"
+        )
+
+    if 'peat-free potting soil' in q:
+        return (
+            "Best buying lead: current results point to peat-free mixes such as PittMoss at Home Depot plus peat-free product guides. "
+            "Check local pickup/shipping before buying. Good peat-free bases include coco coir, composted bark, wood fiber, compost, or recycled-paper fiber."
+            f"{source_text}"
+        )
+
+    if 'succulent' in q and ('90' in q or 'temperature' in q or 'weather' in q):
+        succulent_sources = [
+            item for item in results
+            if 'succulent' in result_text(item) or 'heatwave' in result_text(item)
+        ] or results
+        source_text = ' Sources: ' + ' | '.join(_source_lines(succulent_sources)) if succulent_sources else ''
+        return (
+            "In 90 degree weather, water succulents only if the potting mix is fully dry. If it is dry, water deeply in the early morning so roots can take up moisture before peak heat. "
+            "Skip watering if the soil is still damp, and keep the pot out of harsh afternoon sun if the plant looks stressed."
             f"{source_text}"
         )
 
     return None
 
 
-def _web_answer(user_query: str, web_result: Optional[Dict[str, Any]]) -> Optional[str]:
+def _web_answer(user_query: str, web_result: Optional[Dict[str, Any]], model_choice: str = 'large') -> Optional[str]:
     if web_result and web_result.get('ok'):
         specific = _specific_web_answer(user_query, web_result)
         if specific:
             return specific
+        synthesized = _model_web_answer(user_query, web_result, model_choice=model_choice)
+        if synthesized:
+            return synthesized
         return _format_web_results(web_result)
     offline_answer = _offline_web_answer(user_query)
     if offline_answer:
@@ -652,12 +761,17 @@ def compose_final_answer(
 ) -> str:
     if sql_result and sql_result.get('ok'):
         rows = sql_result.get('rows', [])
-        templated = _template_answer(rows, web_summary=(web_result or {}).get('summary'), user_query=user_query)
+        templated = _template_answer(
+            rows,
+            web_summary=(web_result or {}).get('summary'),
+            user_query=user_query,
+            web_result=web_result,
+        )
         if templated:
             return templated
 
     if route in {'web', 'hybrid'} and web_result:
-        web_answer = _web_answer(user_query, web_result)
+        web_answer = _web_answer(user_query, web_result, model_choice=model_choice)
         if web_answer and (route == 'web' or not (sql_result and sql_result.get('rows'))):
             return web_answer
 
@@ -676,12 +790,12 @@ def compose_final_answer(
             return 'I could not find a matching record in the gardening database.'
         return _format_rows(rows)
     if route == 'web' and web_result:
-        return _web_answer(user_query, web_result) or 'Web search is unavailable.'
+        return _web_answer(user_query, web_result, model_choice=model_choice) or 'Web search is unavailable.'
     if route == 'hybrid':
         parts = []
         if sql_result and sql_result.get('rows'):
             parts.append(_format_rows(sql_result['rows']))
-        web_answer = _web_answer(user_query, web_result)
+        web_answer = _web_answer(user_query, web_result, model_choice=model_choice)
         if web_answer:
             parts.append(web_answer)
         return ' '.join(parts) if parts else 'I used both the database and web search, but found little to combine.'

@@ -35,7 +35,10 @@ if run:
     else:
         st.success(f"Answered in {elapsed}s — route: {response.get('route')}")
         st.subheader('Final Answer')
-        st.write(response.get('final_answer'))
+        final_answer = response.get('final_answer') or ''
+        st.markdown(final_answer)
+        with st.expander('Full answer text'):
+            st.text_area('Full answer', value=final_answer, height=220, label_visibility='collapsed')
 
         st.subheader('Details')
         model_error = response.get('model_error')
@@ -57,8 +60,22 @@ if run:
         st.markdown('**Web Result**')
         web = response.get('web_result') or {}
         if web.get('ok'):
+            st.caption(f"Provider: {web.get('provider', 'unknown')} · Query: {web.get('query', '—')}")
             st.write(web.get('summary'))
-            st.write(web.get('results', [])[:5])
+            results = web.get('results', [])[:5]
+            if results:
+                for idx, item in enumerate(results, start=1):
+                    title = item.get('title') or 'Source'
+                    url = item.get('url') or ''
+                    if url:
+                        st.markdown(f"{idx}. [{title}]({url})")
+                    else:
+                        st.markdown(f"{idx}. {title}")
+                with st.expander('Search snippets'):
+                    for idx, item in enumerate(results, start=1):
+                        snippet = item.get('snippet') or ''
+                        if snippet:
+                            st.caption(f"{idx}. {snippet}")
         else:
             st.write('No web results or web search unavailable.')
 

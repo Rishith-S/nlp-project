@@ -4,7 +4,7 @@ import csv
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agent import (
     build_sql,
@@ -33,8 +33,10 @@ def pick_examples(route: str, limit: int = 3) -> List[str]:
     ][:limit]
 
 
-def _clean_answer(text: Any, limit: int = 220) -> str:
+def _clean_answer(text: Any, limit: Optional[int] = None) -> str:
     cleaned = " ".join(str(text or "").split())
+    if limit is None:
+        return cleaned
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[:limit].rstrip() + "..."

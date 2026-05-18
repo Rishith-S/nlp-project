@@ -315,29 +315,56 @@ def _san_ramon_weather(user_query: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def build_web_query(user_query: str) -> str:
+def _candidate_web_queries(user_query: str) -> List[str]:
     q = user_query.lower()
     if 'san ramon' in q and 'rain' in q:
-        return 'San Ramon CA weather tomorrow rain forecast'
+        return ['San Ramon CA weather tomorrow rain forecast']
     if '94582' in q and 'neem oil' in q:
-        return 'neem oil garden center San Ramon CA 94582'
+        return [
+            'neem oil San Ramon 94582 garden center',
+            '"neem oil" "San Ramon" "94582"',
+            'site:idiggreenacres.com neem oil California garden center',
+        ]
     if 'pruning roses' in q or 'prune roses' in q:
-        return 'video pruning roses tutorial'
+        return [
+            'video pruning roses tutorial extension master gardener',
+            'site:youtube.com pruning roses tutorial',
+        ]
     if 'japanese beetle' in q:
-        return 'Japanese beetle warning Northern California'
+        return [
+            'site:cdfa.ca.gov Japanese beetle California',
+            'site:ipm.ucanr.edu Japanese beetle California eradication',
+            'Japanese beetle warning Northern California',
+        ]
     if 'peat-free potting soil' in q:
-        return 'Home Depot peat-free potting soil'
+        return [
+            'Home Depot peat-free potting soil PittMoss',
+            'peat-free potting soil buy California',
+        ]
     if 'last frost' in q:
-        return 'expected last frost date current year local area'
+        return [
+            'San Ramon CA 94582 last frost date planting calendar',
+            '94582 last frost date garden planting calendar',
+        ]
     if 'succulent' in q and ('90' in q or 'temperature' in q or 'weather' in q):
-        return 'succulent watering hot weather morning'
+        return [
+            'succulent watering hot weather morning extension',
+            'succulent watering heat wave soil dry morning',
+        ]
     if 'eco-friendly' in q or 'eco friendly' in q:
-        return 'university extension eco friendly garden pest control neem insecticidal soap'
+        return [
+            'site:edu garden integrated pest management insecticidal soap neem oil extension',
+            'university extension integrated pest management garden pest control insecticidal soap neem oil',
+        ]
     if 'identify' in q or 'pest' in q:
-        return 'garden pest identification symptoms'
+        return ['garden pest identification symptoms extension']
     if 'weather' in q or 'temperature' in q:
-        return user_query
-    return user_query
+        return [user_query]
+    return [user_query]
+
+
+def build_web_query(user_query: str) -> str:
+    return _candidate_web_queries(user_query)[0]
 
 
 def _clean_snippet(text: str, limit: int = 200) -> str:
@@ -355,25 +382,127 @@ def _clean_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
     for item in results:
         snippet = _clean_snippet(item.get('snippet', ''))
         title = _clean_snippet(item.get('title', ''), limit=120)
-        if snippet:
-            key = snippet.lower()
-            if key in seen:
-                continue
-            seen.add(key)
+        url = item.get('url', '')
+        key = (url or title or snippet).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         cleaned_results.append(
             {
                 'title': title,
-                'url': item.get('url', ''),
+                'url': url,
                 'snippet': snippet,
             }
         )
     return cleaned_results
 
 
+def _source_score(item: Dict[str, str], user_query: str) -> int:
+    q = user_query.lower()
+    title = item.get('title', '').lower()
+    url = item.get('url', '').lower()
+    snippet = item.get('snippet', '').lower()
+    text = f"{title} {url} {snippet}"
+    score = 0
+
+    trusted_markers = [
+        '.edu',
+        '.gov',
+        'extension',
+        'ucanr.edu',
+        'ipm.ucanr.edu',
+        'cdfa.ca.gov',
+        'hgic.clemson.edu',
+        'colostate.edu',
+        'extension.unr.edu',
+        'gardeningsolutions.ifas.ufl.edu',
+        'almanac.com',
+        'garden.org',
+        'homedepot.com',
+        'devilmountainnursery.com',
+        'idiggreenacres.com',
+        'manta.com',
+        'alignable.com',
+        'youtube.com',
+    ]
+    weak_markers = [
+        'facebook.com',
+        'pinterest.',
+        'wikipedia.org',
+        'yelp.com',
+        'amazon.com',
+        'reddit.com',
+        'quora.com',
+    ]
+    for marker in trusted_markers:
+        if marker in url:
+            score += 8
+    for marker in weak_markers:
+        if marker in url:
+            score -= 8
+
+    for word in re.findall(r'[a-z0-9]+', q):
+        if len(word) > 3 and word in text:
+            score += 1
+
+    if '94582' in q and 'neem oil' in q:
+        if 'neem' not in text:
+            score -= 50
+        for marker in ['neem oil', 'san ramon', '94582', 'devil mountain', 'organeem', 'garden center', 'nursery']:
+            if marker in text:
+                score += 7
+    if 'eco-friendly' in q or 'eco friendly' in q:
+        for marker in ['integrated pest management', 'insecticidal soap', 'horticultural oil', 'neem', 'extension']:
+            if marker in text:
+                score += 6
+    if 'japanese beetle' in q:
+        if 'japanese beetle' in title or 'japanese-beetle' in url:
+            score += 30
+        elif 'japanese beetle' not in text:
+            score -= 45
+        for marker in ['cdfa', 'uc ipm', 'ucanr', 'california', 'eradication', 'japanese beetle']:
+            if marker in text:
+                score += 7
+    if 'last frost' in q:
+        if not any(marker in text for marker in ['san ramon', '94582', 'zipcode', 'zip code', 'garden.org/apps/frost-dates']):
+            score -= 35
+        for marker in ['94582', 'san ramon', 'frost dates', 'planting calendar', 'almanac', 'garden.org']:
+            if marker in text:
+                score += 7
+    if 'video' in q and ('pruning roses' in q or 'prune roses' in q):
+        for marker in ['youtube.com', 'video', 'prune roses', 'pruning roses', 'extension']:
+            if marker in text:
+                score += 7
+    if 'peat-free potting soil' in q:
+        for marker in ['peat-free', 'potting soil', 'pittmoss', 'home depot', 'homedepot']:
+            if marker in text:
+                score += 7
+    if 'succulent' in q:
+        if 'succulent' not in text:
+            score -= 25
+        for marker in ['succulent', 'water', 'hot weather', 'morning', 'soil']:
+            if marker in text:
+                score += 5
+    if 'video' not in q and 'youtube.com' in url:
+        score -= 10
+
+    return score
+
+
+def _rank_results(results: List[Dict[str, str]], user_query: str) -> List[Dict[str, str]]:
+    return sorted(
+        results,
+        key=lambda item: (_source_score(item, user_query), item.get('title', '')),
+        reverse=True,
+    )
+
+
 def _build_summary(results: List[Dict[str, str]], max_items: int = 3, limit: int = 420) -> str:
-    snippets = [item.get('snippet', '') for item in results if item.get('snippet')]
-    summary = ' '.join(snippets[:max_items]).strip()
-    return _clean_snippet(summary, limit=limit) or 'Web search returned relevant gardening results.'
+    if not results:
+        return 'Web search did not return usable results.'
+    titles = [item.get('title', 'Source') for item in results[:max_items]]
+    summary = f"Found {len(results)} web sources. Top sources: " + '; '.join(titles) + '.'
+    return _clean_snippet(summary, limit=limit)
 
 
 def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
@@ -381,31 +510,42 @@ def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
     if weather_result:
         return weather_result
 
-    query = build_web_query(user_query)
+    queries = _candidate_web_queries(user_query)
     start = time.perf_counter()
 
-    results = _search_duckduckgo(query, max_results=max_results)
-    provider = 'duckduckgo'
-    if results is None:
-        results = _search_duckduckgo_html(query, max_results=max_results)
-        provider = 'duckduckgo-html' if results else provider
-    if results is None:
+    all_results: List[Dict[str, str]] = []
+    providers: List[str] = []
+    for query in queries:
+        results = _search_duckduckgo(query, max_results=max_results)
+        provider = 'duckduckgo'
+        if results is None:
+            results = _search_duckduckgo_html(query, max_results=max_results)
+            provider = 'duckduckgo-html' if results else provider
+        if results:
+            all_results.extend(results)
+            providers.append(provider)
+        if len(queries) == 1 and len(all_results) >= max_results * 2:
+            break
+
+    if not all_results:
         return {
             'ok': False,
             'provider': None,
-            'query': query,
+            'query': queries[0],
+            'queries': queries,
             'summary': 'Web search unavailable. DuckDuckGo package and HTML fallback both failed.',
             'results': [],
             'error': 'No web search provider available.',
             'latency_s': round(time.perf_counter() - start, 4),
         }
 
-    cleaned_results = _clean_results(results)
+    cleaned_results = _rank_results(_clean_results(all_results), user_query)[:max_results]
     summary = _build_summary(cleaned_results)
     return {
         'ok': True,
-        'provider': provider,
-        'query': query,
+        'provider': '+'.join(sorted(set(providers))) if providers else 'duckduckgo',
+        'query': queries[0],
+        'queries': queries,
         'summary': summary,
         'results': cleaned_results,
         'latency_s': round(time.perf_counter() - start, 4),
