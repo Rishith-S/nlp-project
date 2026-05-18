@@ -1,300 +1,251 @@
 # Gardening Agent
 
-An intelligent gardening assistant that helps users with plant care questions using AI and a local database. Users can ask about plant symptoms, watering schedules, care routines, or search for gardening advice online.
+This is my LLM-based virtual assistant project for gardening help. The agent answers questions about a small personal garden by combining three things:
 
-## Features
+- a local SQLite database with plant records, care profiles, logs, expenses, and a shopping list
+- live web search for current or outside information, such as weather, nursery/product results, pest alerts, and videos
+- two OpenRouter-hosted open-source models so the project can compare a larger and smaller model
 
-* Deterministic query routing using SQL, web search, hybrid mode, or direct LLM answers
-* Grounded database/web templates before any freeform model response
-* Live web search using DuckDuckGo, with an HTML fallback when the package search fails
-* Weather-aware watering answers using Open-Meteo forecast data
-* Local SQLite database for plant care profiles and user plant records
-* Streamlit web interface and Jupyter notebook support
-* Safety checks to reject non gardening queries and prevent SQL injection
+The main goal is not to make a fancy app. The goal is to show a useful assistant that knows when to use tools, grounds its answers in tool output, and can be evaluated with a fixed question set.
 
----
+## What the Agent Can Do
 
-# Project Structure
+The assistant is built around gardening questions like:
+
+- "What is the watering schedule for my banana plant?"
+- "Does my Monstera need repotting based on my logs?"
+- "Find a nursery near zip code 94582 selling neem oil."
+- "Is it going to rain in San Ramon tomorrow? Should I skip watering?"
+- "What are eco-friendly pest control methods?"
+
+For database questions, it reads from SQLite. For current information, it searches the web or calls the weather API. For mixed questions, it combines both.
+
+## How It Works
+
+The app follows a simple pipeline:
+
+1. Check whether the user request is safe and gardening-related.
+2. Route the question to one of four paths: `sql`, `web`, `hybrid`, or `direct`.
+3. Run the needed tool:
+   - SQLite for plant records and logs
+   - DuckDuckGo search for web evidence
+   - Open-Meteo for San Ramon weather
+   - OpenRouter for model responses
+4. Build the final answer from the retrieved evidence.
+5. Return the answer along with the route, SQL/web details, and model status.
+
+I intentionally made routing mostly deterministic instead of asking the model to classify every request. That made the demo much more reliable, especially for the required evaluation questions.
+
+## Models
+
+The project compares two OpenRouter models:
+
+| Role | Model |
+| --- | --- |
+| Larger model | `meta-llama/llama-3.3-70b-instruct` |
+| Smaller model | `microsoft/phi-3.5-mini-instruct` |
+
+The app can still answer many tool-based questions without a working model key because the database and web answers use grounded templates. The API key is mainly needed for direct model responses and model comparison.
+
+## Project Files
 
 ```text
 nlp-project/
-├── agent.py                              # Core routing and query handling
-├── config.py                             # Environment variables, helper functions, SQL and web utilities
-├── agent_db.py                           # Database schema and seed data
-├── streamlit_app.py                      # Streamlit web interface
-├── Gardening_Agent_Colab_Notebook_loc.ipynb  # Jupyter notebook for testing and exploration
-├── eval.py                               # Evaluation and testing scripts
-├── question_dataset.csv                  # 20 planned user queries with expected routes
-├── gardening_agent_full_demo.db          # SQLite database
-├── requirements.txt                      # Python dependencies
-└── README.md                             # Project documentation
+|-- agent.py                              # Routing, tool orchestration, safety checks, final answers
+|-- agent_db.py                           # SQLite schema and seed data
+|-- config.py                             # SQL helper, web search, weather lookup, shared config
+|-- eval.py                               # Evaluation, benchmarks, cache demo, security tests
+|-- streamlit_app.py                      # Minimal UI for user testing
+|-- Gardening_Agent_Colab_Notebook_loc.ipynb # Colab/Jupyter notebook for running the full demo
+|-- question_dataset.csv                  # 20 planned user queries and expected routes
+|-- gardening_agent_full_demo.db          # Seeded SQLite database
+|-- requirements.txt
+`-- README.md
 ```
 
----
+## Database
 
-# How It Works
+The SQLite database is seeded from `agent_db.py`. It includes:
 
-## Query Flow
+- care profiles for plants such as Banana Plant, Cherry Tomatoes, Hibiscus, Succulents, Basil, Mint, Monstera, Snake Plant, Rose, and ZZ Plant
+- personal plant records, including location, status, watering intervals, and recent care dates
+- watering schedules
+- soil readings
+- fertilizer history
+- repotting records
+- growth logs
+- expenses and purchase logs
+- diagnostics
+- a writable shopping list
 
-1. User asks a gardening question
-2. Unsafe and non-gardening requests are refused
-3. The assistant uses deterministic routing to choose:
+Only the `shopping_list` table is writable from the assistant. Other tables are read-only for safety.
 
-   * SQL database
-   * web search
-   * hybrid mode
-4. Results are collected from the selected source
-5. Grounded templates generate tool answers; the LLM handles direct gardening questions
+## Question Dataset
 
-### Example Routes
+The file `question_dataset.csv` contains the 20 planned project questions. Each row includes:
 
-* `sql` → "What plants do I have?"
-* `web` → "How to treat leaf spots?"
-* `hybrid` → "How often should I water my mint?"
+- the user query
+- expected route
+- primary tool
+- category
+- notes
 
----
+This makes the demo easier to grade because the evaluator can see exactly which questions were planned and how each one is supposed to be handled.
 
-# Main Components
+## Setup
 
-| Module             | Purpose                                                        |
-| ------------------ | -------------------------------------------------------------- |
-| `agent.py`         | Handles routing, tool use, safety checks, and response generation |
-| `config.py`        | Helper functions, environment settings, SQL and web utilities  |
-| `agent_db.py`      | Database setup and seed data                                   |
-| `streamlit_app.py` | Web interface                                                  |
-| `eval.py`          | Security testing and evaluation                                |
-| `question_dataset.csv` | User query dataset with expected tool routes               |
+I built and tested this with Python 3.11, but the code should work on recent Python 3 versions.
 
----
+Create and activate a virtual environment:
 
-# Setup
-
-## Requirements
-
-* Python 3.8+
-* OpenRouter API key
-* Optional: `ddgs` package for web search
-
-## Installation
-
-### 1. Move to the project folder
-
-```powershell
-cd c:\Users\shami\Downloads\nlp-project
+```bash
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-### 2. Create a virtual environment
+On Windows PowerShell:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Install dependencies
+Install dependencies:
 
-```powershell
+```bash
 pip install -r requirements.txt
 ```
 
-### 4. Install web search package
-
-```powershell
-pip install ddgs
-```
-
----
-
-# Configuration
-
-## OpenRouter API Key
-
-macOS/Linux:
+Seed or reset the database:
 
 ```bash
-export OPENROUTER_API_KEY="sk-your-key-here"
+python - <<'PY'
+from agent_db import setup_database
+setup_database()
+PY
 ```
 
-Or create a local `.env` file in this project directory:
+## OpenRouter Key
+
+Create a `.env` file in the project folder:
 
 ```bash
-OPENROUTER_API_KEY="sk-your-key-here"
+OPENROUTER_API_KEY="your-openrouter-key-here"
 ```
 
-Windows PowerShell:
+Or export it in the terminal:
 
-```powershell
-$env:OPENROUTER_API_KEY = "sk-your-key-here"
+```bash
+export OPENROUTER_API_KEY="your-openrouter-key-here"
 ```
 
-### Models Used
+Do not commit the `.env` file. It is already ignored by `.gitignore`.
 
-* Large model: `meta-llama/llama-3.3-70b-instruct`
-* Small model: `microsoft/phi-3.5-mini-instruct`
+## Run the Streamlit App
 
-## Optional Database Path
-
-```powershell
-$env:DB_PATH = "C:\path\to\custom.db"
-```
-
-## Offline Mode
-
-```powershell
-$env:OFFLINE_ONLY = "1"
-```
-
----
-
-# Usage
-
-## Streamlit Interface
-
-```powershell
+```bash
 streamlit run streamlit_app.py
 ```
 
-Open:
+Then open:
 
 ```text
 http://localhost:8501
 ```
 
-## Jupyter Notebook
+The Streamlit UI shows the full answer, the selected route, model status, SQL rows, and web sources. Search snippets are available in an expander so the page does not look like a raw search dump.
 
-```powershell
+## Run the Notebook
+
+Open the notebook:
+
+```bash
 jupyter notebook Gardening_Agent_Colab_Notebook_loc.ipynb
 ```
 
-## Python Example
+If you are running locally and do not already have Jupyter installed, install it first:
+
+```bash
+pip install notebook
+```
+
+The notebook is meant for grading and walkthroughs. It runs setup, example queries, prompt technique demos, caching, security tests, and model comparisons. The answer tables are configured to show full answers instead of shortened previews.
+
+## Use From Python
 
 ```python
 from agent import handle_query
 
 result = handle_query(
-    "My tomato leaves are yellow with brown spots",
-    model_choice='large'
+    "Is it going to rain in San Ramon tomorrow? Should I skip watering?",
+    model_choice="large",
 )
 
-print(result['final_answer'])
-print(result['route'])
-print(result['sql_result'])
-print(result['web_result'])
+print(result["route"])
+print(result["final_answer"])
+print(result["web_result"])
 ```
 
----
+## Evaluation
 
-# Database
-
-## Tables
-
-| Table                  | Purpose                |
-| ---------------------- | ---------------------- |
-| `care_profiles`        | Plant care information |
-| `personal_plants`      | User plant records     |
-| `plant_search_history` | Search history         |
-| `shopping_list`        | Editable shopping list |
-
-## Sample Data
-
-The database contains sample data for:
-
-* Banana
-* Tomato
-* Hibiscus
-* Succulents
-* Basil
-* Mint
-* Monstera
-* Snake Plant
-* Rose
-* ZZ Plant
-
----
-
-# Security
-
-## Safety Features
-
-1. Gardening only query checking
-2. SQL injection prevention using parameterized queries
-3. Limited write access to database tables
-4. Safe prompt handling
-
-## Logging
-
-The system logs:
-
-* User queries
-* Tool usage
-* Model performance metrics
-
----
-
-# Example Queries
-
-| Query                             | Route             |
-| --------------------------------- | ----------------- |
-| "What plants do I have?"          | `sql`             |
-| "My tomato leaves are yellow"     | `web` or `hybrid` |
-| "How often should I water basil?" | `hybrid`          |
-| "Tell me a joke"                  | `refusal`         |
-| "Show my shopping list"           | `sql`             |
-
----
-
-# Development and Testing
-
-## Run Evaluation Tests
+Run the main project checks:
 
 ```python
-from eval import run_security_tests
-from eval import run_benchmarks
-from eval import run_demo_queries
+from eval import run_demo_queries, run_benchmarks, run_security_tests
 
-security_results = run_security_tests()
+demo_results = run_demo_queries(model_choice="large")
 benchmarks = run_benchmarks()
-demo_results = run_demo_queries()
+security_results = run_security_tests()
 ```
 
-## Debug Mode
+The evaluation covers:
 
-```powershell
-$env:DEBUG = "1"
-python agent.py
-```
+- route accuracy on the 20-question dataset
+- large vs small model comparison
+- prompt caching demo
+- prompting technique examples
+- prompt-injection/security tests
+- SQL write safety checks
 
----
+## Prompting Techniques
 
-# Design Decisions
+The project includes examples for:
 
-## Why LLM Based Routing?
+- baseline prompting
+- prompt chaining
+- meta prompting
+- self-reflection prompting
 
-Keyword based routing was not flexible enough for different ways users ask questions. LLM classification handles natural language better and improves routing accuracy.
+These are implemented in `run_prompting_techniques()` in `eval.py`.
 
-## Why SQLite?
+## Security Testing
 
-SQLite is lightweight, simple to use, and fast for local retrieval tasks.
+The assistant refuses requests that try to:
 
-## Why Multiple Models?
+- reveal API keys or hidden prompts
+- override system/developer instructions
+- perform prompt injection
+- run dangerous SQL
+- ask non-gardening questions
 
-The large model gives better reasoning while the smaller model gives faster responses and works as a fallback.
+SQL writes are restricted to the shopping list, and generated SQL uses parameters where user-provided values are involved.
 
----
+## Current Limitations
 
-# Future Improvements
+This is still a course project, so there are a few honest limitations:
 
-* Plant disease image recognition
-* Weather API integration
-* Seasonal care reminders
-* Plant health tracking
-* Multi language support
+- Web search quality can vary because DuckDuckGo results change.
+- Live product availability is not guaranteed, so the agent tells users to call or verify before buying.
+- Weather answers are centered on San Ramon because that is the demo location.
+- The database is a small seeded dataset, not a real user account system.
+- The UI is intentionally simple because the focus is tool use and evaluation.
 
----
+## Tech Stack
 
-# Technologies Used
-
-* OpenRouter
-* DuckDuckGo Search (`ddgs`)
-* SQLite
-* Streamlit
-* Python
+- Python
+- SQLite
+- Streamlit
+- pandas
+- DuckDuckGo search through `ddgs`, with an HTML fallback
+- Open-Meteo weather API
+- OpenRouter for model calls
