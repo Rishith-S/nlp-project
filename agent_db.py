@@ -4,7 +4,7 @@ import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
-from config import CURRENT_MONTH_DAY, DB_PATH, LAST_MONTH_END, LAST_MONTH_START, TODAY, _iso
+from config import CURRENT_MONTH_DAY, DB_PATH, LAST_MONTH_END, TODAY, _iso
 
 # Seed data merged from gardening_agent_seed.py
 CARE_PROFILES = [

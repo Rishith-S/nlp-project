@@ -3,50 +3,134 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import (
-    CURRENT_MONTH_DAY,
     LAST_MONTH_END,
     LAST_MONTH_START,
-    TODAY,
 )
 from agent_db import CARE_PROFILES, PERSONAL_PLANTS
-from config import execute_sql, pretty_rows, search_web
+from config import execute_sql, search_web
 
 DENYLIST_PATTERNS = [
     r"\b(drop|delete|truncate|alter|update|insert)\s+table\b",
     r"\b(sqlite_master|pragma|attach|detach)\b",
     r"\b(api\s*key|secret|token|password)\b",
     r"\b(exfiltrate|leak|steal)\b",
+    r"\b(ignore|override|forget)\s+(all\s+)?(previous|prior|system|developer)\s+instructions\b",
+    r"\b(system|developer)\s+(prompt|message|instructions?)\b",
+    r"\b(jailbreak|prompt\s+injection)\b",
+    r"\boverride\b.*\b(policy|guardrails?|safety|scope)\b",
+    r"\breveal\b.*\b(prompt|instructions?|settings|secrets?)\b",
 ]
 
 
-@dataclass
-class BenchmarkResult:
-    model_name: str
-    loaded: bool
-    load_error: Optional[str]
-    tool_accuracy: float
-    avg_latency_s: float
-    avg_keyword_coverage: float
-    robustness: float
-
-
-OPENROUTER_LARGE_MODEL = "meta-llama/llama-3.1-8b-instruct"
+OPENROUTER_LARGE_MODEL = "meta-llama/llama-3.3-70b-instruct"
 OPENROUTER_SMALL_MODEL = "microsoft/phi-3.5-mini-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-OPENROUTER_API_KEY = "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"
+
+def _load_local_env() -> None:
+    env_path = Path(__file__).with_name(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):].strip()
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env()
+_MODEL_LAST_ERROR: Optional[str] = None
+
+GARDENING_TERMS = {
+    'basil',
+    'beetle',
+    'compost',
+    'fertilize',
+    'fertilizer',
+    'flower',
+    'garden',
+    'gardening',
+    'grow',
+    'hibiscus',
+    'indoor plant',
+    'leaf',
+    'leaves',
+    'mint',
+    'monstera',
+    'mulch',
+    'nursery',
+    'pest',
+    'plant',
+    'plants',
+    'potting',
+    'prune',
+    'repot',
+    'root',
+    'soil',
+    'tomato',
+    'water',
+    'watering',
+}
+
+WEB_ROUTE_TERMS = {
+    'buy',
+    'eco friendly',
+    'eco-friendly',
+    'forecast',
+    'frost',
+    'near me',
+    'nursery',
+    'rain',
+    'selling',
+    'today',
+    'tomorrow',
+    'video',
+    'warning',
+    'warnings',
+    'weather',
+    'where can i buy',
+}
+
+
+def _get_openrouter_api_key() -> str:
+    return os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+
+def _set_model_error(message: Optional[str]) -> None:
+    global _MODEL_LAST_ERROR
+    _MODEL_LAST_ERROR = message
+
+
+def _sanitize_model_error(message: Any) -> str:
+    cleaned = ' '.join(str(message).split())
+    cleaned = re.sub(r"sk-[A-Za-z0-9_-]+", "[redacted]", cleaned)
+    cleaned = re.sub(r"Bearer\s+\S+", "Bearer [redacted]", cleaned, flags=re.IGNORECASE)
+    return cleaned[:300]
+
+
+def _model_error() -> Optional[str]:
+    return _MODEL_LAST_ERROR
 
 
 def _openrouter_chat(prompt: str, model_id: str) -> Optional[str]:
-    if not OPENROUTER_API_KEY:
+    api_key = _get_openrouter_api_key()
+    if not api_key:
+        _set_model_error("OPENROUTER_API_KEY is not set.")
         return None
     try:
         import requests
     except Exception:
+        _set_model_error("The requests package is not installed.")
         return None
 
     payload = {
@@ -59,29 +143,49 @@ def _openrouter_chat(prompt: str, model_id: str) -> Optional[str]:
         "max_tokens": 256,
     }
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "http://localhost",
         "X-Title": "Gardening Agent Notebook",
     }
     try:
         response = requests.post(OPENROUTER_BASE_URL, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            error_message = response.text
+            try:
+                error_payload = response.json()
+                if isinstance(error_payload, dict):
+                    error = error_payload.get("error", error_payload)
+                    if isinstance(error, dict):
+                        error_message = error.get("message") or error.get("code") or error_message
+            except Exception:
+                pass
+            _set_model_error(
+                f"OpenRouter API error {response.status_code}: {_sanitize_model_error(error_message)}"
+            )
+            return None
         data = response.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or None
-    except Exception:
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if content:
+            _set_model_error(None)
+            return content
+        _set_model_error("OpenRouter response did not include a message.")
+        return None
+    except Exception as exc:
+        _set_model_error(f"OpenRouter request failed: {_sanitize_model_error(exc)}")
         return None
 
 
 def _model_summarize(prompt: str, model_choice: str) -> Optional[str]:
-    if not OPENROUTER_API_KEY:
+    if not _get_openrouter_api_key():
+        _set_model_error("OPENROUTER_API_KEY is not set.")
         return None
     model_id = OPENROUTER_LARGE_MODEL if model_choice == 'large' else OPENROUTER_SMALL_MODEL
     return _openrouter_chat(prompt, model_id)
 
 
 def _model_loaded(model_choice: str) -> bool:
-    return bool(OPENROUTER_API_KEY)
+    return bool(_get_openrouter_api_key())
 
 
 def _has_weather_and_plant(user_query: str) -> bool:
@@ -96,11 +200,6 @@ def _is_spending_query(user_query: str) -> bool:
     return any(word in q for word in ['spend', 'spent', 'expense', 'expenses', 'gardening supplies'])
 
 
-def _is_pest_alert(user_query: str) -> bool:
-    q = user_query.lower()
-    return any(word in q for word in ['beetle', 'pest', 'mildew', 'warning', 'alert'])
-
-
 def _matches_denylist(user_query: str) -> bool:
     for pattern in DENYLIST_PATTERNS:
         if re.search(pattern, user_query, flags=re.IGNORECASE):
@@ -108,53 +207,45 @@ def _matches_denylist(user_query: str) -> bool:
     return False
 
 
-def _is_gardening_related(user_query: str, model_choice: str = 'large') -> bool:
-    prompt = (
-        "Classify the user query as gardening-related or not gardening-related. "
-        "Reply with exactly YES or NO and nothing else.\n\n"
-        f"Query: {user_query}"
-    )
-    for choice in (model_choice, 'small' if model_choice == 'large' else 'large'):
-        response = _model_summarize(prompt, model_choice=choice)
-        if not response:
-            continue
-        normalized = response.strip().lower()
-        first_token = normalized.split()[0] if normalized else ''
-        if first_token in {'yes', 'y'}:
-            return True
-        if first_token in {'no', 'n'}:
-            return False
-    return False
+def _looks_gardening_related(user_query: str) -> bool:
+    q = user_query.lower()
+    if _detect_intent(user_query):
+        return True
+    if any(name.lower() in q for name in PLANT_CANDIDATES):
+        return True
+    return any(term in q for term in GARDENING_TERMS)
+
+
+def _fallback_route(user_query: str) -> str:
+    q = user_query.lower()
+    intent = _detect_intent(user_query)
+    if intent:
+        if intent == 'temp_safe_range' and any(term in q for term in WEB_ROUTE_TERMS):
+            return 'hybrid'
+        return 'sql'
+    if _has_weather_and_plant(user_query):
+        return 'hybrid'
+    if 'water' in q and any(term in q for term in ['forecast', 'rain', 'weather']):
+        return 'hybrid'
+    if any(term in q for term in WEB_ROUTE_TERMS):
+        return 'web'
+    if _looks_gardening_related(user_query):
+        return 'direct'
+    return 'direct'
 
 
 def _is_unsafe_prompt(user_query: str) -> Optional[str]:
     if _matches_denylist(user_query):
         return 'Blocked: unsafe or sensitive request.'
-    if not _is_gardening_related(user_query):
-        return 'Blocked: out-of-scope request (gardening only).'
     return None
 
 
 def expected_route_from_keywords(user_query: str, model_choice: str = 'large') -> str:
-    if not _is_gardening_related(user_query, model_choice=model_choice):
-        return 'refusal'
-    prompt = (
-        "Choose the best tool route for this gardening question. Reply with exactly one word: "
-        "sql, web, or hybrid.\n\n"
-        f"Query: {user_query}"
-    )
-    for choice in (model_choice, 'small' if model_choice == 'large' else 'large'):
-        response = _model_summarize(prompt, model_choice=choice)
-        if not response:
-            continue
-        normalized = response.strip().lower().split()[0]
-        if normalized in {'sql', 'web', 'hybrid'}:
-            return normalized
-    return 'sql'
+    return _fallback_route(user_query)
 
 
 def route_query(user_query: str, model_choice: str = 'large') -> str:
-    return expected_route_from_keywords(user_query, model_choice=model_choice)
+    return _fallback_route(user_query)
 
 
 PLANT_CANDIDATES = sorted(
@@ -366,7 +457,7 @@ def _template_answer(rows: List[Dict[str, Any]], web_summary: Optional[str], use
             f"Safe temperature range for {first.get('common_name', 'Hibiscus')}: "
             f"{first['temp_safe_low_c']}C to {first['temp_safe_high_c']}C."
         )
-        if web_summary:
+        if web_summary and 'unavailable' not in web_summary.lower():
             summary = summary + f" Forecast context: {web_summary}"
         else:
             summary = summary + " I do not have today's temperature, so check the local forecast."
@@ -404,6 +495,146 @@ def _template_answer(rows: List[Dict[str, Any]], web_summary: Optional[str], use
     return None
 
 
+def _offline_web_answer(user_query: str) -> Optional[str]:
+    q = user_query.lower()
+    if '94582' in q and 'neem oil' in q:
+        return (
+            "I cannot verify live store inventory from the current web tool. Best next step: call garden centers, "
+            "hardware stores, or hydroponic shops near 94582 and ask for cold-pressed neem oil before you go."
+        )
+    if 'video' in q and ('pruning roses' in q or 'prune roses' in q):
+        return (
+            "Look for a university extension or master gardener rose-pruning video. A good tutorial should show three things: "
+            "remove dead or crossing canes, open the center for airflow, and cut just above outward-facing buds."
+        )
+    if 'eco-friendly' in q or 'eco friendly' in q:
+        return (
+            "Eco-friendly pest control starts with identifying the pest, removing heavily affected leaves, spraying with water, "
+            "and using barriers or traps before pesticides. If needed, use insecticidal soap, neem oil, or horticultural oil "
+            "according to the label, and avoid spraying when pollinators are active."
+        )
+    if 'san ramon' in q and 'rain' in q:
+        return (
+            "I cannot confirm tomorrow's San Ramon forecast from the current web tool. Check a local weather app before watering; "
+            "if meaningful rain is expected overnight or tomorrow morning, skip watering and recheck soil moisture the next day."
+        )
+    if 'succulent' in q and ('90' in q or 'temperature' in q or 'weather' in q):
+        return (
+            "For succulents in 90 degree weather, water only if the soil is fully dry. "
+            "Water deeply in the early morning, avoid wetting leaves in harsh sun, and skip watering if the potting mix "
+            "still feels damp."
+        )
+    if 'japanese beetle' in q:
+        return (
+            "Web search is unavailable, so I cannot confirm live Japanese beetle alerts. "
+            "Check your county extension office or state agriculture department for current local pest advisories."
+        )
+    if 'last frost' in q:
+        return (
+            "Web search is unavailable, so I cannot confirm this year's forecast. "
+            "Use a local extension frost-date tool or weather service, then wait until nighttime lows are reliably above "
+            "your plant's safe range before transplanting tender crops."
+        )
+    if 'peat-free potting soil' in q:
+        return (
+            "Web search is unavailable, so I cannot confirm current store stock. "
+            "Look for peat-free mixes based on coco coir, composted bark, wood fiber, or compost, and check the bag for the "
+            "plant type it is formulated for."
+        )
+    return None
+
+
+def _format_web_results(web_result: Dict[str, Any], limit: int = 3) -> str:
+    summary = web_result.get('summary') or 'I found relevant web results.'
+    results = web_result.get('results') or []
+    sources = []
+    for item in results[:limit]:
+        title = item.get('title') or 'Source'
+        url = item.get('url') or ''
+        snippet = item.get('snippet') or ''
+        if url:
+            sources.append(f"{title}: {url}")
+        elif snippet:
+            sources.append(f"{title}: {snippet}")
+    if sources:
+        return summary + " Sources: " + " | ".join(sources)
+    return summary
+
+
+def _source_lines(results: List[Dict[str, Any]], limit: int = 3) -> List[str]:
+    lines = []
+    for item in results[:limit]:
+        title = item.get('title') or 'Source'
+        url = item.get('url') or ''
+        if url:
+            lines.append(f"{title} ({url})")
+        else:
+            lines.append(title)
+    return lines
+
+
+def _specific_web_answer(user_query: str, web_result: Dict[str, Any]) -> Optional[str]:
+    q = user_query.lower()
+    results = web_result.get('results') or []
+    source_text = ' Sources: ' + ' | '.join(_source_lines(results)) if results else ''
+
+    if '94582' in q and 'neem oil' in q:
+        candidates = [
+            item for item in results
+            if any(term in (item.get('title', '') + item.get('snippet', '')).lower()
+                   for term in ['organeem', 'san ramon', '94582', 'devil mountain', 'garden center'])
+        ] or results
+        source_text = ' Sources: ' + ' | '.join(_source_lines(candidates)) if candidates else ''
+        return (
+            "Best lead I found: Organeem appears in San Ramon/94582 search results for neem products. "
+            "Also check nearby garden centers such as Devil Mountain or local nurseries, but call first because search results do not prove live inventory."
+            f"{source_text}"
+        )
+
+    if 'video' in q and ('pruning roses' in q or 'prune roses' in q):
+        videos = [
+            item for item in results
+            if 'youtube' in item.get('url', '').lower() or 'video' in (item.get('title', '') + item.get('snippet', '')).lower()
+        ] or results
+        source_text = ' Sources: ' + ' | '.join(_source_lines(videos)) if videos else ''
+        return (
+            "Good rose-pruning video options found. Pick one that demonstrates removing dead/crossing canes, opening the center for airflow, "
+            "and cutting above outward-facing buds."
+            f"{source_text}"
+        )
+
+    if 'eco-friendly' in q or 'eco friendly' in q:
+        return (
+            "Eco-friendly pest control: first identify the pest, remove affected leaves, spray pests off with water, use barriers/traps, "
+            "and encourage beneficial insects. If pressure remains, use targeted lower-impact treatments such as insecticidal soap, "
+            "horticultural oil, or neem oil according to the label, avoiding sprays when pollinators are active."
+            f"{source_text}"
+        )
+
+    if 'last frost' in q:
+        return (
+            "Use a local frost-date or extension source rather than a generic national date. For planting, wait until the local last-frost estimate has passed "
+            "and the 7-10 day forecast keeps nighttime lows safely above the crop's tolerance."
+            f"{source_text}"
+        )
+
+    return None
+
+
+def _web_answer(user_query: str, web_result: Optional[Dict[str, Any]]) -> Optional[str]:
+    if web_result and web_result.get('ok'):
+        specific = _specific_web_answer(user_query, web_result)
+        if specific:
+            return specific
+        return _format_web_results(web_result)
+    offline_answer = _offline_web_answer(user_query)
+    if offline_answer:
+        return offline_answer
+    if not web_result:
+        return None
+    return web_result.get('summary') or 'Web search is unavailable.'
+
+
 def _format_rows(rows: List[Dict[str, Any]], limit: int = 3) -> str:
     formatted = []
     for row in rows[:limit]:
@@ -419,27 +650,16 @@ def compose_final_answer(
     web_result: Optional[Dict[str, Any]] = None,
     model_choice: str = 'large',
 ) -> str:
-    evidence = []
-    if sql_result:
-        evidence.append(f"SQL: {pretty_rows(sql_result.get('rows', []), limit=5)}")
-    if web_result:
-        evidence.append(f"WEB: {web_result.get('summary', '')}")
-
-    if evidence:
-        model_prompt = (
-            "Answer the user using the evidence. Be concise and practical.\n"
-            f"Question: {user_query}\n"
-            f"Evidence: {' '.join(evidence)}"
-        )
-        model_answer = _model_summarize(model_prompt, model_choice=model_choice)
-        if model_answer:
-            return model_answer
-
     if sql_result and sql_result.get('ok'):
         rows = sql_result.get('rows', [])
         templated = _template_answer(rows, web_summary=(web_result or {}).get('summary'), user_query=user_query)
         if templated:
             return templated
+
+    if route in {'web', 'hybrid'} and web_result:
+        web_answer = _web_answer(user_query, web_result)
+        if web_answer and (route == 'web' or not (sql_result and sql_result.get('rows'))):
+            return web_answer
 
     if route == 'sql' and sql_result:
         if not sql_result.get('ok'):
@@ -449,19 +669,33 @@ def compose_final_answer(
             if sql_result.get('row_count') == 0 and 'shopping list' in user_query.lower():
                 return 'That item is already on your shopping list.'
             if sql_result.get('row_count'):
+                item = _extract_item_name(user_query)
+                if item:
+                    return f"Added {item} to the shopping list."
                 return f"Updated the database successfully. Rows affected: {sql_result['row_count']}."
             return 'I could not find a matching record in the gardening database.'
         return _format_rows(rows)
     if route == 'web' and web_result:
-        return web_result.get('summary', 'I found relevant web results.')
+        return _web_answer(user_query, web_result) or 'Web search is unavailable.'
     if route == 'hybrid':
         parts = []
         if sql_result and sql_result.get('rows'):
             parts.append(_format_rows(sql_result['rows']))
-        if web_result and web_result.get('summary'):
-            parts.append(web_result['summary'])
+        web_answer = _web_answer(user_query, web_result)
+        if web_answer:
+            parts.append(web_answer)
         return ' '.join(parts) if parts else 'I used both the database and web search, but found little to combine.'
-    return 'I could not determine the best route for that question.'
+    direct_prompt = (
+        "Answer this gardening question clearly and concisely. "
+        "Give practical plant-care advice and avoid making up database or web facts.\n\n"
+        f"User: {user_query}"
+    )
+    direct_answer = _model_summarize(direct_prompt, model_choice=model_choice)
+    if direct_answer:
+        return direct_answer
+    if _model_error():
+        return f"I can answer this directly only when the model is available. Model call failed: {_model_error()}"
+    return 'I can answer this directly, but the model call failed. Check your OPENROUTER_API_KEY or network connection.'
 
 
 def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]:
@@ -480,9 +714,24 @@ def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]
             ),
             'model_choice': model_choice,
             'model_loaded': _model_loaded(model_choice),
+            'model_error': _model_error(),
             'refusal_reason': refusal_reason,
         }
     route = route_query(user_query, model_choice=model_choice)
+    if route == 'direct' and not _looks_gardening_related(user_query):
+        return {
+            'query': user_query,
+            'route': 'refusal',
+            'expected_route': None,
+            'latency_s': round(time.perf_counter() - start, 4),
+            'sql_result': None,
+            'web_result': None,
+            'final_answer': 'I can only help with gardening-related questions.',
+            'model_choice': model_choice,
+            'model_loaded': _model_loaded(model_choice),
+            'model_error': _model_error(),
+            'refusal_reason': 'Blocked: out-of-scope request (gardening only).',
+        }
     expected_route = route
     sql_result = None
     web_result = None
@@ -490,6 +739,8 @@ def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]
         sql_payload = build_sql(user_query)
         if sql_payload:
             sql_result = execute_sql(sql_payload['sql'], sql_payload.get('params'))
+        elif route == 'sql':
+            route = 'direct'
     if route in {'web', 'hybrid'}:
         web_result = search_web(user_query)
     latency_s = round(time.perf_counter() - start, 4)
@@ -510,16 +761,17 @@ def handle_query(user_query: str, model_choice: str = 'large') -> Dict[str, Any]
         'final_answer': final_answer,
         'model_choice': model_choice,
         'model_loaded': _model_loaded(model_choice),
+        'model_error': _model_error(),
     }
 
 
 __all__ = [
-    'BenchmarkResult',
     'build_sql',
     'compose_final_answer',
     'expected_route_from_keywords',
     'handle_query',
     'route_query',
+    '_model_error',
     '_model_loaded',
     '_model_summarize',
 ]

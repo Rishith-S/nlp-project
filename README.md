@@ -4,9 +4,10 @@ An intelligent gardening assistant that helps users with plant care questions us
 
 ## Features
 
-* Smart query routing using SQL, web search, or both together
-* LLM based query classification for better accuracy
-* Live web search using DuckDuckGo for recent gardening information
+* Deterministic query routing using SQL, web search, hybrid mode, or direct LLM answers
+* Grounded database/web templates before any freeform model response
+* Live web search using DuckDuckGo, with an HTML fallback when the package search fails
+* Weather-aware watering answers using Open-Meteo forecast data
 * Local SQLite database for plant care profiles and user plant records
 * Streamlit web interface and Jupyter notebook support
 * Safety checks to reject non gardening queries and prevent SQL injection
@@ -17,12 +18,13 @@ An intelligent gardening assistant that helps users with plant care questions us
 
 ```text
 nlp-project/
-├── agent.py                              # Core routing, classification, and query handling
+├── agent.py                              # Core routing and query handling
 ├── config.py                             # Environment variables, helper functions, SQL and web utilities
 ├── agent_db.py                           # Database schema and seed data
 ├── streamlit_app.py                      # Streamlit web interface
 ├── Gardening_Agent_Colab_Notebook_loc.ipynb  # Jupyter notebook for testing and exploration
 ├── eval.py                               # Evaluation and testing scripts
+├── question_dataset.csv                  # 20 planned user queries with expected routes
 ├── gardening_agent_full_demo.db          # SQLite database
 ├── requirements.txt                      # Python dependencies
 └── README.md                             # Project documentation
@@ -35,14 +37,14 @@ nlp-project/
 ## Query Flow
 
 1. User asks a gardening question
-2. The system checks if the query is gardening related
-3. The assistant decides whether to use:
+2. Unsafe and non-gardening requests are refused
+3. The assistant uses deterministic routing to choose:
 
    * SQL database
    * web search
    * hybrid mode
 4. Results are collected from the selected source
-5. The LLM generates the final response
+5. Grounded templates generate tool answers; the LLM handles direct gardening questions
 
 ### Example Routes
 
@@ -56,11 +58,12 @@ nlp-project/
 
 | Module             | Purpose                                                        |
 | ------------------ | -------------------------------------------------------------- |
-| `agent.py`         | Handles routing, query classification, and response generation |
+| `agent.py`         | Handles routing, tool use, safety checks, and response generation |
 | `config.py`        | Helper functions, environment settings, SQL and web utilities  |
 | `agent_db.py`      | Database setup and seed data                                   |
 | `streamlit_app.py` | Web interface                                                  |
 | `eval.py`          | Security testing and evaluation                                |
+| `question_dataset.csv` | User query dataset with expected tool routes               |
 
 ---
 
@@ -105,13 +108,27 @@ pip install ddgs
 
 ## OpenRouter API Key
 
+macOS/Linux:
+
+```bash
+export OPENROUTER_API_KEY="sk-your-key-here"
+```
+
+Or create a local `.env` file in this project directory:
+
+```bash
+OPENROUTER_API_KEY="sk-your-key-here"
+```
+
+Windows PowerShell:
+
 ```powershell
 $env:OPENROUTER_API_KEY = "sk-your-key-here"
 ```
 
 ### Models Used
 
-* Large model: `meta-llama/llama-3.1-8b-instruct`
+* Large model: `meta-llama/llama-3.3-70b-instruct`
 * Small model: `microsoft/phi-3.5-mini-instruct`
 
 ## Optional Database Path
@@ -160,7 +177,8 @@ result = handle_query(
 
 print(result['final_answer'])
 print(result['route'])
-print(result['sources'])
+print(result['sql_result'])
+print(result['web_result'])
 ```
 
 ---

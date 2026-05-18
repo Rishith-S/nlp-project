@@ -1,0 +1,21 @@
+id,query,expected_route,primary_tool,category,example_group,notes
+1,What is the watering schedule for my banana plant?,sql,database,watering,sql,Checks a personal watering schedule from SQLite.
+2,When did I last fertilize my banana plant?,sql,database,fertilizer,,Checks fertilizer history from SQLite.
+3,Which plants are inactive?,sql,database,inventory,,Lists inactive personal plants from SQLite.
+4,How much did I spend on gardening supplies last month?,sql,database,expenses,,Aggregates last-month gardening supply expenses.
+5,What is the optimal soil pH for Cherry Tomatoes?,sql,database,care_profile,,Reads structured care profile data.
+6,Does my Monstera need repotting based on my logs?,sql,database,repotting,sql,Checks repotting log and root-bound flag.
+7,My tomato leaves are yellow with brown spots. What could it be?,sql,database,diagnosis,,Looks up local diagnostic records.
+8,Compare basil and mint growth this month.,sql,database,growth,,Compares structured growth log measurements.
+9,Show my shopping list.,sql,database,shopping_list,sql,Reads editable shopping list table.
+10,Add neem oil to my shopping list.,sql,database,shopping_list,,Tests allowed write operation to shopping_list.
+11,Recommend 3 low-light indoor plants for beginners.,sql,database,recommendation,,Uses structured care profiles for recommendations.
+12,Is today's temperature safe for my outdoor Hibiscus in San Ramon?,hybrid,database+web,weather_safety,hybrid,Combines Hibiscus safe temperature range with weather context.
+13,Is it going to rain in San Ramon tomorrow? Should I skip watering?,hybrid,web,weather_watering,hybrid,Uses current weather context for watering advice.
+14,Find a nursery near zip code 94582 selling neem oil.,web,web,local_shopping,web,Requires current local web information.
+15,Find a video on pruning roses.,web,web,how_to_video,web,Requires current web/video search.
+16,Any Japanese beetle warnings in Northern California?,web,web,pest_alert,,Requires recent pest alert information.
+17,Where can I buy peat-free potting soil?,web,web,shopping,,Requires current product/source information.
+18,What is the expected last frost date this year?,web,web,seasonal_weather,,Requires current/local frost-date information.
+19,Should I water succulents in 90 degree weather?,hybrid,web,weather_watering,hybrid,Combines plant care guidance with weather context.
+20,What are eco-friendly pest control methods?,web,web,pest_control,web,Uses web/general gardening advice.

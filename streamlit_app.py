@@ -1,3 +1,4 @@
+import os
 import time
 import streamlit as st
 
@@ -37,6 +38,11 @@ if run:
         st.write(response.get('final_answer'))
 
         st.subheader('Details')
+        model_error = response.get('model_error')
+        if model_error:
+            st.markdown('**Model Status**')
+            st.warning(model_error)
+
         st.markdown('**SQL Query**')
         st.code(response.get('sql_query') or '—')
 
@@ -62,5 +68,8 @@ if run:
 status.text('Ready')
 
 st.sidebar.markdown('---')
+st.sidebar.markdown(
+    f"OpenRouter key visible: **{'yes' if os.getenv('OPENROUTER_API_KEY') else 'no'}**"
+)
 st.sidebar.markdown('Gardening Agent Streamlit UI — wraps the notebook functions.')
 st.sidebar.markdown('Database: gardening_agent_full_demo.db')

@@ -7,15 +7,13 @@ import sqlite3
 import statistics
 import textwrap
 import time
+from html import unescape
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
+from urllib.parse import parse_qs, quote_plus, urlparse
+import pandas as pd
 
 try:
     from IPython.display import display
@@ -183,12 +181,146 @@ def _search_duckduckgo(query: str, max_results: int = 5) -> Optional[List[Dict[s
         return None
 
 
+def _decode_duckduckgo_url(href: str) -> str:
+    href = unescape(href)
+    if href.startswith('//'):
+        href = 'https:' + href
+    parsed = urlparse(href)
+    if 'duckduckgo.com' in parsed.netloc and parsed.path.startswith('/l/'):
+        target = parse_qs(parsed.query).get('uddg', [''])[0]
+        return target or href
+    return href
+
+
+def _strip_html(text: str) -> str:
+    text = re.sub(r'<.*?>', ' ', text, flags=re.S)
+    return ' '.join(unescape(text).split())
+
+
+def _search_duckduckgo_html(query: str, max_results: int = 5) -> Optional[List[Dict[str, str]]]:
+    try:
+        import requests
+    except Exception:
+        return None
+
+    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code >= 400:
+            return None
+    except Exception:
+        return None
+
+    html = response.text
+    matches = list(re.finditer(
+        r'<a[^>]*class="result__a"[^>]*href="(?P<href>.*?)"[^>]*>(?P<title>.*?)</a>',
+        html,
+        flags=re.S,
+    ))
+    results: List[Dict[str, str]] = []
+    for idx, match in enumerate(matches[:max_results]):
+        next_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(html)
+        block = html[match.end():next_start]
+        snippet_match = re.search(
+            r'class="result__snippet"[^>]*>(?P<snippet>.*?)</a>',
+            block,
+            flags=re.S,
+        )
+        results.append(
+            {
+                'title': _strip_html(match.group('title')),
+                'url': _decode_duckduckgo_url(match.group('href')),
+                'snippet': _strip_html(snippet_match.group('snippet')) if snippet_match else '',
+            }
+        )
+    return results or None
+
+
+def _san_ramon_weather(user_query: str) -> Optional[Dict[str, Any]]:
+    q = user_query.lower()
+    if 'san ramon' not in q or not any(word in q for word in ['rain', 'weather', 'temperature', 'temp', 'forecast']):
+        return None
+    try:
+        import requests
+    except Exception:
+        return None
+
+    url = (
+        'https://api.open-meteo.com/v1/forecast'
+        '?latitude=37.7799&longitude=-121.9780'
+        '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'
+        '&temperature_unit=fahrenheit&precipitation_unit=inch'
+        '&forecast_days=3&timezone=America%2FLos_Angeles'
+    )
+    start = time.perf_counter()
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return None
+
+    daily = data.get('daily', {})
+    dates = daily.get('time', [])
+    if not dates:
+        return None
+
+    target_idx = 1 if 'tomorrow' in q and len(dates) > 1 else 0
+    target_date = dates[target_idx]
+    rain_chance = daily.get('precipitation_probability_max', [None])[target_idx]
+    rain_amount = daily.get('precipitation_sum', [None])[target_idx]
+    temp_high = daily.get('temperature_2m_max', [None])[target_idx]
+    temp_low = daily.get('temperature_2m_min', [None])[target_idx]
+
+    rain_phrase = (
+        f"{rain_chance}% chance of precipitation"
+        if rain_chance is not None
+        else "precipitation chance unavailable"
+    )
+    amount_phrase = (
+        f"{rain_amount:.2f} in expected"
+        if isinstance(rain_amount, (int, float))
+        else "precipitation amount unavailable"
+    )
+    temp_phrase = (
+        f"high {temp_high:.0f}F / low {temp_low:.0f}F"
+        if isinstance(temp_high, (int, float)) and isinstance(temp_low, (int, float))
+        else "temperature unavailable"
+    )
+    summary = (
+        f"San Ramon forecast for {target_date}: {rain_phrase}, {amount_phrase}, {temp_phrase}. "
+        "Skip watering if the soil is already moist or if rain is likely; otherwise water based on soil moisture."
+    )
+    return {
+        'ok': True,
+        'provider': 'open-meteo',
+        'query': 'San Ramon weather forecast',
+        'summary': summary,
+        'results': [
+            {
+                'title': 'Open-Meteo San Ramon Forecast',
+                'url': 'https://open-meteo.com/',
+                'snippet': summary,
+            }
+        ],
+        'weather': {
+            'date': target_date,
+            'precipitation_probability_max': rain_chance,
+            'precipitation_sum_in': rain_amount,
+            'temperature_2m_max_f': temp_high,
+            'temperature_2m_min_f': temp_low,
+        },
+        'latency_s': round(time.perf_counter() - start, 4),
+    }
+
+
 def build_web_query(user_query: str) -> str:
     q = user_query.lower()
     if 'san ramon' in q and 'rain' in q:
         return 'San Ramon CA weather tomorrow rain forecast'
     if '94582' in q and 'neem oil' in q:
-        return 'nursery near 94582 neem oil'
+        return 'neem oil garden center San Ramon CA 94582'
     if 'pruning roses' in q or 'prune roses' in q:
         return 'video pruning roses tutorial'
     if 'japanese beetle' in q:
@@ -200,7 +332,7 @@ def build_web_query(user_query: str) -> str:
     if 'succulent' in q and ('90' in q or 'temperature' in q or 'weather' in q):
         return 'succulent watering hot weather morning'
     if 'eco-friendly' in q or 'eco friendly' in q:
-        return 'eco friendly pest control methods'
+        return 'university extension eco friendly garden pest control neem insecticidal soap'
     if 'identify' in q or 'pest' in q:
         return 'garden pest identification symptoms'
     if 'weather' in q or 'temperature' in q:
@@ -245,20 +377,26 @@ def _build_summary(results: List[Dict[str, str]], max_items: int = 3, limit: int
 
 
 def search_web(user_query: str, max_results: int = 5) -> Dict[str, Any]:
+    weather_result = _san_ramon_weather(user_query)
+    if weather_result:
+        return weather_result
+
     query = build_web_query(user_query)
     start = time.perf_counter()
 
-    # Use DuckDuckGo when available
     results = _search_duckduckgo(query, max_results=max_results)
     provider = 'duckduckgo'
+    if results is None:
+        results = _search_duckduckgo_html(query, max_results=max_results)
+        provider = 'duckduckgo-html' if results else provider
     if results is None:
         return {
             'ok': False,
             'provider': None,
             'query': query,
-            'summary': 'Web search unavailable. Install ddgs to enable DuckDuckGo search.',
+            'summary': 'Web search unavailable. DuckDuckGo package and HTML fallback both failed.',
             'results': [],
-            'error': 'No web search provider available. Install ddgs.',
+            'error': 'No web search provider available.',
             'latency_s': round(time.perf_counter() - start, 4),
         }
 
